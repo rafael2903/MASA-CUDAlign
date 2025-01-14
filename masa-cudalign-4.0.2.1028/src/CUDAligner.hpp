@@ -3,17 +3,17 @@
  * Copyright (c) 2010-2015   Edans Sandes
  *
  * This file is part of MASA-CUDAlign.
- * 
+ *
  * MASA-CUDAlign is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
- * 
+ *
  * MASA-CUDAlign is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- * 
+ *
  * You should have received a copy of the GNU General Public License
  * along with MASA-CUDAlign.  If not, see <http://www.gnu.org/licenses/>.
  *
@@ -283,12 +283,12 @@ void lauch_external_diagonals(
 		const int i0, const int i1,
 		const int step, const int2 cutBlock, cuda_structures_t* cuda);
 
-void bind_textures(const unsigned char* seq0, const int seq0_len,
-		const unsigned char* seq1, const int seq1_len);
-void unbind_textures();
 void copy_split(const int* split, const int blocks);
 
 void initializeBusHInfinity(const int p0, const int p1, int2* d_busH);
+
+void setGlobalSequences(unsigned char* d_seq0, unsigned char* d_seq1);
+void unsetGlobalSequences();
 
 
 #endif /* SMITH_WATERMAN_H_ */

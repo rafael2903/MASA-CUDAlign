@@ -100,7 +100,6 @@ void printDevProp(FILE* file) {
 		fprintf(file, "Maximum dimension %d of grid:   %d\n", i, devProp.maxGridSize[i]);
 	fprintf(file, "Clock rate:                    %d\n",  devProp.clockRate);
 	fprintf(file, "Total constant memory:         %lu\n", (unsigned long) devProp.totalConstMem);
-	fprintf(file, "Texture alignment:             %lu\n", (unsigned long) devProp.textureAlignment);
 	fprintf(file, "Concurrent copy and execution: %s\n",  (devProp.deviceOverlap ? "Yes" : "No"));
 	fprintf(file, "Number of multiprocessors:     %d\n",  devProp.multiProcessorCount);
 	fprintf(file, "Kernel execution timeout:      %s\n",  (devProp.kernelExecTimeoutEnabled ? "Yes" : "No"));

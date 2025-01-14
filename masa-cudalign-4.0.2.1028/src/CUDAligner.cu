@@ -3,17 +3,17 @@
  * Copyright (c) 2010-2015   Edans Sandes
  *
  * This file is part of MASA-CUDAlign.
- * 
+ *
  * MASA-CUDAlign is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
- * 
+ *
  * MASA-CUDAlign is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- * 
+ *
  * You should have received a copy of the GNU General Public License
  * along with MASA-CUDAlign.  If not, see <http://www.gnu.org/licenses/>.
  *
@@ -64,35 +64,15 @@
 #define IGNORE_BEST_SCORE			(false)
 
 
-/*
- * Texture definition for storing read-only large variables.
+/**
+ * Global memory pointer for the DNA sequence #0 (vertical in the DP matrix).
  */
+__device__ unsigned char* d_seq0_global;
 
 /**
- * Texture definition for the DNA of sequence#0 (vertical in the DP matrix).
+ * Global memory pointer for the DNA sequence #1 (horizontal in the DP matrix).
  */
-texture<unsigned char, 1, cudaReadModeElementType> t_seq0;
-
-/**
- * Texture definition for the DNA of sequence#1 (horizontal in the DP matrix).
- */
-texture<unsigned char, 1, cudaReadModeElementType> t_seq1;
-
-
-/**
- * Texture definition for the read-only part of the horizontal bus.
- * This is a tricky part, since the same horizontal bus is used for
- * writing and for reading. The data is read from the horizontal bus
- * in a linear pattern (left to right) using the texture. The data
- * is written in the same horizontal bus using the same linear pattern
- * (left to right), but the written data is shifted left some cells
- * compared with the reading data. So, the written data does not affect the
- * read-only data. In every external diagonal we clean the texture cache
- * for safety. For the single phase execution (small sequences), this
- * optimization must be disabled.
- */
-texture<         int2, 1, cudaReadModeElementType> t_busH;
-
+__device__ unsigned char* d_seq1_global;
 
 
 /*
@@ -239,20 +219,20 @@ static __device__ int my_max4(int a, int b, int c, int d) {
 }
 
 /**
- * Fetch a block with 4 nucleotides at positions [i..i+3] of sequence t_seq0.
+ * Fetch a block with 4 nucleotides at positions [i..i+3] of sequence d_seq0_global.
  *
  * @param i the row of the first base of the DNA 4-block.
  *        The i index is 0-based.
  * @return ss the 4 bases in the (x,y,z,w) uchar4 vector, representing
- *         the bases (i, i+1, i+2, i+3) of the sequence t_seq0.
+ *         the bases (i, i+1, i+2, i+3) of the sequence d_seq0_global.
  */
 static __device__ void fetchSeq0(const int i, uchar4* ss) {
 	if (i >= 0) {
-        ss->x = tex1Dfetch(t_seq0,i);
-        ss->y = tex1Dfetch(t_seq0,i+1);
-        ss->z = tex1Dfetch(t_seq0,i+2);
-        ss->w = tex1Dfetch(t_seq0,i+3);
-	}
+        ss->x = d_seq0_global[i];
+        ss->y = d_seq0_global[i + 1];
+        ss->z = d_seq0_global[i + 2];
+        ss->w = d_seq0_global[i + 3];
+    }
 }
 
 
@@ -416,15 +396,8 @@ __device__ void kernel_check_max4(const int i, const int j,
  *
  * The values H(i-1,j) and F(i-1,j) may be read from
  * the shared memory or from the horizontal bus, depending if $i$ is the
- * first row of the block or not. If USE_TEXTURE_CACHE is used, the
- * horizontal bus is read from a texture cache (t_busH). See the t_busH comments
- * for a better comprehension of this optimization and its pitfall.
- * For very small sequences, this optimization does not work and the
- * horizontal bus is read directly from the busH global vector.
- *
- * @tparam USE_TEXTURE_CACHE	Enables or disable the t_busH texture read. If
- * 									it is disabled, the read is made directly
- * 									from the original busH global vector.
+ * first row of the block or not. The horizontal bus is read directly from
+ * the busH global vector.
  *
  * @param[in] idx	Index of the current thread.
  * @param[in] bank		The shared memory bank (1 or 0) from which the data will be taken.
@@ -438,23 +411,16 @@ __device__ void kernel_check_max4(const int i, const int j,
  * @param[out] f	The loaded value of F(i-1,j)
  * @param[out] s	The j-th dna nucleotide of sequence#1 (horizontal)
  */
-template <bool USE_TEXTURE_CACHE>
 __device__ void kernel_load(const int idx, const int bank, const int j, int2* busH, int *h, int *f, unsigned char *s) {
-	*s = tex1Dfetch(t_seq1, j);
+	*s = d_seq1_global[j];
     if (idx) {
     	// Threads (except the first one) must read from the shared memory.
         *h = s_colx[bank][idx];
         *f = s_coly[bank][idx];
     } else {
     	// First thread of the block must read from the horizontal bus.
-        int2 temp;
-        if (USE_TEXTURE_CACHE) {
-        	temp = tex1Dfetch(t_busH,j); // read from texture
-        } else {
-        	temp = busH[j]; // read directly from the busH global vector
-        }
-        *h = temp.x; // H-component
-        *f = temp.y; // F-component
+        *h = busH[j].x; // H-component
+        *f = busH[j].y; // F-component
     }
 }
 
@@ -673,7 +639,7 @@ __device__ void process_internal_diagonals_short_phase(
 		kernel_check_bound<COLUMN_SOURCE, COLUMN_DESTINATION>(i0, d_split[0], i1, d_split[gridDim.x], &i, &j, &ss, &left_e, &diag_h, &left_h, &flush_id, loadColumn_h, loadColumn_e, flushColumn_h, flushColumn_e, idx, blockDim.x*gridDim.x*ALPHA);
 		if (flush_id) {
 			unsigned char s1;
-			kernel_load<true>(idx, 1, j, busH, &up_h, &up_f, &s1);
+			kernel_load(idx, 1, j, busH, &up_h, &up_f, &s1);
 			kernel_sw4<RECURRENCE_TYPE, FLUSH_LAST_ROW>(i, j, s1, ss, &left_e, &up_f, left_h, diag_h , up_h , &curr_h, flush_id);
 			kernel_check_max4<CHECK_LOCATION, FLUSH_LAST_ROW>(i, j, max, max_pos, &curr_h, true, flush_id);
 			kernel_flush<FLUSH_LAST_ROW>(i, j, idx, 0, busH, extraH, &curr_h, up_f, THREADS_COUNT-1, flush_id);
@@ -685,7 +651,7 @@ __device__ void process_internal_diagonals_short_phase(
 		kernel_check_bound<COLUMN_SOURCE, COLUMN_DESTINATION>(i0, d_split[0], i1, d_split[gridDim.x], &i, &j, &ss, &left_e, &up_h, &curr_h, &flush_id, loadColumn_h, loadColumn_e, flushColumn_h, flushColumn_e, idx, blockDim.x*gridDim.x*ALPHA);
 		if (flush_id) {
 			unsigned char s1;
-			kernel_load<true>(idx, 0, j, busH, &diag_h, &up_f, &s1);
+			kernel_load(idx, 0, j, busH, &diag_h, &up_f, &s1);
 			kernel_sw4<RECURRENCE_TYPE, FLUSH_LAST_ROW>(i, j, s1, ss, &left_e, &up_f, curr_h, up_h , diag_h, &left_h, flush_id);
 			kernel_check_max4<CHECK_LOCATION, FLUSH_LAST_ROW>(i, j, max, max_pos, &left_h, true, flush_id);
 			kernel_flush<FLUSH_LAST_ROW>(i, j, idx, 1, busH, extraH, &left_h, up_f, THREADS_COUNT-1, flush_id);
@@ -702,7 +668,7 @@ __device__ void process_internal_diagonals_short_phase(
 		kernel_check_bound<COLUMN_SOURCE, COLUMN_DESTINATION>(i0, j0, i1, j1, &i, &j, &ss, &left_e, &diag_h, &left_h, &flush_id, loadColumn_h, loadColumn_e, flushColumn_h, flushColumn_e, idx, blockDim.x*gridDim.x*ALPHA);
 		if (flush_id) {
 			unsigned char s1;
-			kernel_load<true>(idx, 1, j, busH, &up_h, &up_f, &s1);
+			kernel_load(idx, 1, j, busH, &up_h, &up_f, &s1);
 			kernel_sw4<RECURRENCE_TYPE, FLUSH_LAST_ROW>(i, j, s1, ss, &left_e, &up_f, left_h, diag_h, up_h, &curr_h, flush_id);
 			kernel_check_max4<CHECK_LOCATION, FLUSH_LAST_ROW>(i, j, max, max_pos, &curr_h, true, flush_id);
 			kernel_flush<FLUSH_LAST_ROW>(i, j, idx, 0, busH, extraH, &curr_h, up_f, THREADS_COUNT-1, flush_id);
@@ -869,7 +835,7 @@ __device__ void process_internal_diagonals_long_phase(const int xLen, const int 
 		int up_f;
 
 		unsigned char s1;
-		kernel_load<true>(idx, 1, j, busH, &up_h, &up_f, &s1);
+		kernel_load(idx, 1, j, busH, &up_h, &up_f, &s1);
 		kernel_sw4<RECURRENCE_TYPE, FLUSH_LAST_ROW>(i, j, s1, ss, &left_e, &up_f, left_h, diag_h, up_h, &cur_h, flush_id);
 		kernel_check_max4<CHECK_LOCATION, FLUSH_LAST_ROW>(i, j, max, max_pos, &cur_h, false, flush_id);
 		kernel_flush<FLUSH_LAST_ROW>(i, j, idx, 0, busH, extraH, &cur_h, up_f, THREADS_COUNT-1, flush_id);
@@ -891,7 +857,7 @@ __device__ void process_internal_diagonals_long_phase(const int xLen, const int 
 		unsigned char s1;
 
 		/* Loop-unrolling #1 */
-		kernel_load<true>(idx, 1, j, busH, &up_h, &up_f, &s1);
+		kernel_load(idx, 1, j, busH, &up_h, &up_f, &s1);
 		kernel_sw4<RECURRENCE_TYPE, FLUSH_LAST_ROW>(i, j, s1, ss, &left_e, &up_f, left_h, diag_h, up_h, &cur_h, flush_id);
 		kernel_check_max4<CHECK_LOCATION, FLUSH_LAST_ROW>(i, j, max, max_pos, &cur_h, false, flush_id);
 		kernel_flush<FLUSH_LAST_ROW>(i, j, idx, 0, busH, extraH, &cur_h, up_f, THREADS_COUNT-1, flush_id);
@@ -899,7 +865,7 @@ __device__ void process_internal_diagonals_long_phase(const int xLen, const int 
 		__syncthreads();
 
 		/* Loop-unrolling #2 */
-		kernel_load<true>(idx, 0, j, busH, &diag_h, &up_f, &s1);
+		kernel_load(idx, 0, j, busH, &diag_h, &up_f, &s1);
 		kernel_sw4<RECURRENCE_TYPE, FLUSH_LAST_ROW>(i, j, s1, ss, &left_e, &up_f, cur_h, up_h, diag_h, &left_h, flush_id);
 		kernel_check_max4<CHECK_LOCATION, FLUSH_LAST_ROW>(i, j, max, max_pos, &left_h, false, flush_id);
 		kernel_flush<FLUSH_LAST_ROW>(i, j, idx, 1, busH, extraH, &left_h, up_f, THREADS_COUNT-1, flush_id);
@@ -979,7 +945,7 @@ __global__ void kernel_long_phase(
     int max = -INF;//blockResult[bx].w;
 
         if (i >= i1) return;
-       
+
 	if (i < i1) {
 		const int block_i = (by*THREADS_COUNT)*ALPHA + i0;
 		if (block_i+THREADS_COUNT*ALPHA < i1) {
@@ -1058,7 +1024,7 @@ __device__ void process_internal_diagonals_single_phase(
 		kernel_check_bound<COLUMN_SOURCE, COLUMN_DESTINATION>(i0, j0, i1, j1, &i, &j, &ss, &left_e, &diag_h, &left_h, &flush_id, loadColumn_h, loadColumn_e, flushColumn_h, flushColumn_e, idx, blockDim.x*ALPHA);
         if (flush_id) {
             unsigned char s1;
-            kernel_load<false>(idx, index, j, busH, &up_h, &up_f, &s1);
+            kernel_load(idx, index, j, busH, &up_h, &up_f, &s1);
 			kernel_sw4<RECURRENCE_TYPE, FLUSH_LAST_ROW>(i, j, s1, ss, &left_e, &up_f, left_h, diag_h  , up_h  , &curr_h, flush_id);
 			kernel_check_max4<CHECK_LOCATION, FLUSH_LAST_ROW>(i, j, max, max_pos, &curr_h, true, flush_id);
             kernel_flush<FLUSH_LAST_ROW>(i, j, idx, 1-index, busH, extraH, &curr_h, up_f, blockDim.x-1, flush_id);
@@ -1177,26 +1143,6 @@ static __global__ void kernel_initialize_busH_ungapped(int2* busH, const int j0,
 }
 
 /**
- * Bind the textures for the DNA sequences.
- * @param seq0 sequence 0
- * @param seq0_len sequence 0 length
- * @param seq1 sequence 1
- * @param seq1_len sequence 1 length
- */
-void bind_textures(const unsigned char* seq0, const int seq0_len, const unsigned char* seq1, const int seq1_len) {
-	cutilSafeCall(cudaBindTexture(0, t_seq0, seq0, seq0_len));
-	cutilSafeCall(cudaBindTexture(0, t_seq1, seq1, seq1_len));
-}
-
-/**
- * Unbind the textures for the DNA sequences.
- */
-void unbind_textures() {
-	cutilSafeCall(cudaUnbindTexture(t_seq1));
-	cutilSafeCall(cudaUnbindTexture(t_seq0));
-}
-
-/**
  * Copies the split positions (used to identify the range of columns for each
  * block) to the GPU constant memory. The element split[0] must be the first
  * column of the partition and split[blocks] must be the last column.
@@ -1262,7 +1208,6 @@ template <int COLUMN_SOURCE, int COLUMN_DESTINATION, int RECURRENCE_TYPE, int CH
 void lauch_external_diagonals(const int blocks, const int threads,
 		const int i0, const int i1,
 		const int step, const int2 cutBlock, cuda_structures_t* cuda) {
-	cutilSafeCall(cudaBindTexture(0, t_busH, cuda->d_busH, cuda->busH_size));
 	dim3 grid( blocks, 1, 1);
 	if (blocks == 1) {
 		dim3 block( threads, 1, 1);
@@ -1274,7 +1219,6 @@ void lauch_external_diagonals(const int blocks, const int threads,
 	}
 	cudaStreamSynchronize(0);
 	cutilCheckMsg("Kernel execution failed");
-	cutilSafeCall(cudaUnbindTexture(t_busH));
 }
 
 
@@ -1331,6 +1275,26 @@ void lauch_external_diagonals(int COLUMN_SOURCE, int COLUMN_DESTINATION, int REC
 	}
 }
 
+/**
+ * @brief Sets the global memory pointers for the DNA sequences.
+ *
+ * This function copies the device pointers for the DNA sequences #0 and #1
+ * to the global memory pointers `d_seq0_global` and `d_seq1_global`, respectively.
+ *
+ * @param d_seq0 Device pointer to the DNA sequence #0.
+ * @param d_seq1 Device pointer to the DNA sequence #1.
+ */
+void setGlobalSequences(unsigned char* d_seq0, unsigned char* d_seq1) {
+	cutilSafeCall(cudaMemcpyToSymbol(d_seq0_global, &d_seq0, sizeof(unsigned char*)));
+	cutilSafeCall(cudaMemcpyToSymbol(d_seq1_global, &d_seq1, sizeof(unsigned char*)));
+}
 
-
-
+/**
+ * Sets the global memory pointers `d_seq0_global` and `d_seq1_global`
+ * to `NULL`.
+ */
+void unsetGlobalSequences() {
+	int* nullPtr = NULL;
+	cutilSafeCall(cudaMemcpyToSymbol(d_seq1_global, &nullPtr, sizeof(int*)));
+	cutilSafeCall(cudaMemcpyToSymbol(d_seq0_global, &nullPtr, sizeof(int*)));
+}

@@ -3,17 +3,17 @@
  * Copyright (c) 2010-2015   Edans Sandes
  *
  * This file is part of MASA-CUDAlign.
- * 
+ *
  * MASA-CUDAlign is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
- * 
+ *
  * MASA-CUDAlign is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- * 
+ *
  * You should have received a copy of the GNU General Public License
  * along with MASA-CUDAlign.  If not, see <http://www.gnu.org/licenses/>.
  *
@@ -37,11 +37,6 @@
  * Defines the maximum number of forks for multigpu processes
  */
 #define MAX_GPUS		(8)
-
-/**
- * Maximum sequence size considering the 2^27 CUDA texture limit.
- */
-#define MAX_SEQUENCE_SIZE (134150000)
 
 
 /* ************************************************************************** */
@@ -102,10 +97,8 @@ aligner_capabilities_t CUDAligner::getCapabilities() {
 	capabilities.variable_penalties 		= NOT_SUPPORTED;
 	capabilities.fork_processes				= SUPPORTED;
 
-	capabilities.maximum_seq0_len	= MAX_SEQUENCE_SIZE;
-	capabilities.maximum_seq1_len	= MAX_SEQUENCE_SIZE;
-	//capabilities.maximum_seq0_len	= 500000;
-	//capabilities.maximum_seq1_len	= 500000;
+	capabilities.maximum_seq0_len	= 0;
+	capabilities.maximum_seq1_len	= 0;
 
 	return capabilities;
 }
@@ -235,12 +228,6 @@ void CUDAligner::setSequences(
 		return;
 	}
 
-	if (seq0_len > MAX_SEQUENCE_SIZE || seq1_len > MAX_SEQUENCE_SIZE) {
-			fprintf(stderr, "FATAL: Sequence size is too big. (limit.: %d BP).\n", MAX_SEQUENCE_SIZE);
-			fprintf(stderr, "Split to smaller sequences.\n");
-			exit(1);
-	}
-
 	size_t usedMemoryBefore;
 	getMemoryUsage(&usedMemoryBefore);
 
@@ -252,11 +239,10 @@ void CUDAligner::setSequences(
 
 	cuda.d_seq0 = allocCudaSeq(seq0, seq0_len, seq0_padding, '\0');
 	cuda.d_seq1 = allocCudaSeq(seq1, seq1_len, seq1_padding, '\0');
+	setGlobalSequences(cuda.d_seq0, cuda.d_seq1);
+
 	cuda.busH_size = bus_size;
-
-	bind_textures(cuda.d_seq0, seq0_len+seq0_padding, cuda.d_seq1, seq1_len+seq1_padding);
-
-	cuda.d_busH         = (int2*)  allocCuda0(bus_size);
+	cuda.d_busH = (int2*) allocCuda0(bus_size);
 
     size_t usedMemory;
 	getMemoryUsage(&usedMemory);
@@ -277,7 +263,7 @@ void CUDAligner::unsetSequences() {
 	cutilSafeCall(cudaFree(cuda.d_seq1));
 	cuda.d_seq0 = NULL;
 	cuda.d_seq1 = NULL;
-	unbind_textures();
+	unsetGlobalSequences();
 
 	cutilSafeCall(cudaFree(cuda.d_busH));
 	cuda.d_busH = NULL;
@@ -543,7 +529,6 @@ void CUDAligner::printInitialStatistics(FILE* file) {
 	fprintf(file, "    THREADS: %d\n", THREADS_COUNT);
 	fprintf(file, "      ALPHA: %d\n", ALPHA);
 	fprintf(file, "  CUDA ARCH: %.1f\n", getCompiledCapability()/100.0f);
-	fprintf(file, "  MAX_SEQUENCE_SIZE: %d\n", MAX_SEQUENCE_SIZE);
 
 	fprintf(file, "\n===== GPU MEMORY USAGE =====\n");
 	fprintf(file, " Total Global Memory: %lu MB\n", (unsigned long) (statTotalMem/1024/1024));
